@@ -1991,6 +1991,29 @@ cdef class RecordWriterTestHarness:
         record.native_frame_id = native_frame_id
         return self._writer.get().writeThreadSpecificRecord(tid, record)
 
+    def benchmark_allocation_records(
+        self,
+        size_t count,
+        records.thread_id_t tid,
+        uintptr_t address,
+        size_t size,
+        unsigned char allocator,
+        size_t native_frame_id=0,
+        bool reuse_address=True,
+    ) -> bool:
+        """Write many allocation records in a Cython loop for writer microbenchmarks."""
+        cdef records.AllocationRecord record
+        cdef size_t i
+        record.size = size
+        record.allocator = <records.Allocator>allocator
+        record.native_frame_id = native_frame_id
+
+        for i in range(count):
+            record.address = address if reuse_address else address + i * 16
+            if not self._writer.get().writeThreadSpecificRecord(tid, record):
+                return False
+        return True
+
     def write_frame_push(
         self,
         records.thread_id_t tid,
