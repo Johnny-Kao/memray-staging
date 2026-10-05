@@ -360,6 +360,16 @@ class RecordWriterTestHarness:
         allocator: int,
         native_frame_id: int = 0,
     ) -> bool: ...
+    def benchmark_allocation_records(
+        self,
+        count: int,
+        tid: int,
+        address: int,
+        size: int,
+        allocator: int,
+        native_frame_id: int = 0,
+        reuse_address: bool = True,
+    ) -> bool: ...
     def write_frame_push(
         self,
         tid: int,
