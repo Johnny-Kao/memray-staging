@@ -1,0 +1,111 @@
+name: M02 contiguous-record benchmark
+
+on:
+  pull_request:
+    branches:
+      - research/m02-benchmark-base
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout benchmark base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          persist-credentials: false
+
+      - name: Checkout candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          persist-credentials: false
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -qy \
+            pkg-config \
+            libdebuginfod-dev \
+            libunwind-dev \
+            liblz4-dev \
+            libdw-dev \
+            libelf-dev \
+            python3-dev \
+            python3-venv
+
+      - name: Build base and candidate
+        run: |
+          python3 -m venv /tmp/m02-base
+          python3 -m venv /tmp/m02-candidate
+          /tmp/m02-base/bin/python -m pip install --upgrade pip
+          /tmp/m02-candidate/bin/python -m pip install --upgrade pip
+          /tmp/m02-base/bin/python -m pip install -e ./base --group test
+          /tmp/m02-candidate/bin/python -m pip install -e ./candidate --group test
+
+      - name: Candidate record-writer correctness tests
+        run: |
+          cd candidate
+          /tmp/m02-candidate/bin/python -m pytest tests/integration/test_record_writer.py -q
+
+      - name: Interleaved writer benchmark
+        run: |
+          set -euxo pipefail
+          /tmp/m02-base/bin/python base/research/m02-contiguous-record-commit/benchmark_writer.py \
+            --count 250000 --repetitions 5 --warmups 1 > /tmp/base-1.json
+          /tmp/m02-candidate/bin/python candidate/research/m02-contiguous-record-commit/benchmark_writer.py \
+            --count 250000 --repetitions 5 --warmups 1 > /tmp/candidate-1.json
+          /tmp/m02-candidate/bin/python candidate/research/m02-contiguous-record-commit/benchmark_writer.py \
+            --count 250000 --repetitions 5 --warmups 1 > /tmp/candidate-2.json
+          /tmp/m02-base/bin/python base/research/m02-contiguous-record-commit/benchmark_writer.py \
+            --count 250000 --repetitions 5 --warmups 1 > /tmp/base-2.json
+
+      - name: Compare base and candidate
+        run: |
+          python3 - <<'PY'
+          import json
+          import statistics
+
+          with open("/tmp/base-1.json") as f:
+              base1 = json.load(f)
+          with open("/tmp/base-2.json") as f:
+              base2 = json.load(f)
+          with open("/tmp/candidate-1.json") as f:
+              cand1 = json.load(f)
+          with open("/tmp/candidate-2.json") as f:
+              cand2 = json.load(f)
+
+          print("| case | base ns/record | candidate ns/record | faster | capture size |")
+          print("|---|---:|---:|---:|---:|")
+          for case in base1:
+              base_samples = (
+                  base1[case]["raw_ns_per_record"]
+                  + base2[case]["raw_ns_per_record"]
+              )
+              candidate_samples = (
+                  cand1[case]["raw_ns_per_record"]
+                  + cand2[case]["raw_ns_per_record"]
+              )
+              base = statistics.median(base_samples)
+              candidate = statistics.median(candidate_samples)
+              faster = (base - candidate) / base * 100
+
+              sizes = {
+                  *base1[case]["capture_sizes"],
+                  *base2[case]["capture_sizes"],
+                  *cand1[case]["capture_sizes"],
+                  *cand2[case]["capture_sizes"],
+              }
+              if len(sizes) != 1:
+                  raise SystemExit(f"capture size mismatch for {case}: {sorted(sizes)}")
+
+              print(
+                  f"| {case} | {base:.2f} | {candidate:.2f} | "
+                  f"{faster:+.2f}% | {sizes.pop()} |"
+              )
+          PY
